@@ -1,59 +1,54 @@
 name: Release
 
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch to release from
+        required: true
+        default: main
+
 permissions:
   contents: write
 
-on:
-  push:
-    tags:
-      - v[0-9]+.*
-
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/create-gh-release-action@v1
-        with:
-          # (optional) Path to changelog.
-          changelog: CHANGELOG.md
-          # (required) GitHub token for creating GitHub Releases.
-          token: ${{ secrets.GITHUB_TOKEN }}
+  build:
+    name: Build and publish release
+    runs-on: ubuntu-22.04
 
-  upload-assets:
-    needs: create-release
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/upload-rust-binary-action@v1
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          # (required) Comma-separated list of binary names (non-extension portion of filename) to build and upload.
-          # Note that glob pattern is not supported yet.
-          bin: simple-completion-language-server
-          # (optional) Target triple, default is host triple.
-          # This is optional but it is recommended that this always be set to
-          # clarify which target you are building for if macOS is included in
-          # the matrix because GitHub Actions changed the default architecture
-          # of macos-latest since macos-14.
-          target: ${{ matrix.target }}
-          # (optional) On which platform to distribute the `.tar.gz` file.
-          # [default value: unix]
-          # [possible values: all, unix, windows, none]
-          tar: unix
-          # (optional) On which platform to distribute the `.zip` file.
-          # [default value: windows]
-          # [possible values: all, unix, windows, none]
-          zip: windows
-          # (required) GitHub token for uploading assets to GitHub Releases.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.branch || github.ref_name }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Build project
+        run: cargo build --locked --release --target x86_64-unknown-linux-gnu
+
+      - name: Pack release artifacts
+        run: |
+          tar -czf \
+            "./target/${{ github.event.repository.name }}_linux_amd64.tar.gz" \
+            -C ./target/x86_64-unknown-linux-gnu/release \
+            simple-completion-language-server
+
+      - name: Set tag name
+        run: echo "GITHUB_RELEASE_TAG=v$(date -u +'%Y%m%d.%H%M%S')" >> "$GITHUB_ENV"
+
+      - name: Create GitHub release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.GITHUB_RELEASE_TAG }}
+          target_commitish: ${{ github.event.inputs.branch || github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            ./target/${{ github.event.repository.name }}_linux_amd64.tar.gz
